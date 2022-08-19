@@ -28,6 +28,7 @@ use crate::{
         Fq6Parameters,
         FqParameters,
         Fr,
+        FrParameters,
         G1Affine,
         G1Projective,
         G2Affine,
@@ -58,8 +59,9 @@ use snarkvm_fields::{
     Zero,
 };
 use snarkvm_utilities::{
-    biginteger::{BigInteger, BigInteger384},
+    biginteger::{BigInteger, BigInteger256, BigInteger384},
     rand::{test_rng, Uniform},
+    ToBytes,
 };
 
 use rand::{thread_rng, Rng, SeedableRng};
@@ -81,6 +83,69 @@ fn test_bls12_377_fr() {
         sqrt_field_test(b);
         field_serialization_test::<Fr>();
     }
+}
+
+struct SqrtHasher {
+    hash_xor: u32,
+    hash_mod: usize,
+}
+
+impl SqrtHasher {
+    fn hash(&self, x: &Fr) -> usize {
+        // This is just the simplest constant-time perfect hash construction that could
+        // possibly work. The 32 low-order bits are unique within the 2^S order subgroup,
+        // then the xor acts as "salt" to injectively randomize the output when taken modulo
+        // `hash_mod`. Since the table is small, we do not need anything more complicated.
+        let slice = &x.to_bytes_le().unwrap()[..4];
+        let mut array = [0u8; 4];
+        array.copy_from_slice(slice);
+        let lower_32 = u32::from_le_bytes(array);
+        (lower_32 ^ self.hash_xor) as usize % self.hash_mod
+    }
+}
+
+#[test]
+fn calc_tables_fr() {
+    let g = Fr::two_adic_root_of_unity().pow(FrParameters::T);
+    let mut gtab = (0..6).scan(g, |gi, _| {
+        // gi == ROOT_OF_UNITY^(64^i)
+        let gtab_i: Vec<Fr> = (0..64)
+            .scan(Fr::one(), |acc, _| {
+                let res = *acc;
+                *acc *= *gi;
+                Some(res)
+            })
+            .collect();
+        *gi = gtab_i[63] * *gi;
+        Some(gtab_i)
+    });
+    let gtab_0 = gtab.next().unwrap();
+    let gtab_1 = gtab.next().unwrap();
+    let gtab_2 = gtab.next().unwrap();
+    let gtab_3 = gtab.next().unwrap();
+    let gtab_4 = gtab.next().unwrap();
+    let mut gtab_5 = gtab.next().unwrap();
+    assert_eq!(gtab.next(), None);
+
+    let hasher = SqrtHasher { hash_xor: 0x7EAA, hash_mod: 141 };
+
+    // Now invert gtab[5].
+    let mut inv: Vec<u8> = vec![1; 141];
+    for (j, gtab_5_j) in gtab_5.iter().enumerate() {
+        let hash = hasher.hash(gtab_5_j);
+        // 1 is the last value to be assigned, so this ensures there are no collisions.
+        assert!(inv[hash] == 1);
+        inv[hash] = ((64 - j) & 0x3F) as u8;
+    }
+
+    gtab_5.truncate(32);
+    // println!("{:?}", inv);
+    // println!("{:?}\n\n\n", gtab_0.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
+    // println!("{:?}\n\n\n", gtab_1.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
+    // println!("{:?}\n\n\n", gtab_2.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
+    // println!("{:?}\n\n\n", gtab_3.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
+    // println!("{:?}\n\n\n", gtab_4.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
+    // println!("{:?}\n\n\n", gtab_5.iter().map(|el| el.to_repr().0).collect::<Vec<[u64; 4]>>());
 }
 
 #[test]

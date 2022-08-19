@@ -33,7 +33,15 @@ impl Fp256Parameters for FrParameters {}
 impl FftParameters for FrParameters {
     type BigInteger = BigInteger;
 
-    const POWERS_OF_G: &'static [BigInteger] = &[];
+    const G0: &'static [BigInteger] = &[];
+    const G1: &'static [BigInteger] = &[];
+    const G2: &'static [BigInteger] = &[];
+    const G3: &'static [BigInteger] = &[];
+    const G4: &'static [BigInteger] = &[];
+    const G5: &'static [BigInteger] = &[];
+    const HASH_INV: &'static [u8] = &[];
+    const HASH_MOD: usize = 0;
+    const HASH_XOR: u32 = 0;
     const TWO_ADICITY: u32 = 1;
     #[rustfmt::skip]
     const TWO_ADIC_ROOT_OF_UNITY: BigInteger = BigInteger([

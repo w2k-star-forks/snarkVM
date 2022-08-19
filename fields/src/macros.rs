@@ -93,99 +93,78 @@ macro_rules! sqrt_impl {
             QuadraticResidue => {
                 let n = $P::TWO_ADICITY as u64;
                 // `T` is equivalent to `m` in the paper.
+                // TODO: we can use an addition chain here to speed up the calculation
+                // of the exponentiation.
                 let v = $self.pow($P::T_MINUS_ONE_DIV_TWO);
-                let x = *$self * v.square();
+                let uv = *$self * v;
+                let x5 = uv * v;
+                let sqr = |x: $Self, i: u32| (0..i).fold(x, |x, _| x.square());
+                let x4 = sqr(x5, 8);
+                let x3 = sqr(x4, 7);
+                let x2 = sqr(x3, 8);
+                let x1 = sqr(x2, 8);
+                let x0 = sqr(x1, 8);
+                let g = $Self::two_adic_root_of_unity().pow($P::T);
 
-                let k = ((n - 1) as f64).sqrt().floor() as u64;
-                // It's important that k_2 results in a number which makes `l_minus_one_times_k`
-                // divisible by `k`, because the native arithmetic will not match the field
-                // arithmetic otherwise (native numbers will divide and round down, but field
-                // elements will end up nowhere near the native number).
-                let k_2 = if n % 2 == 0 { k / 2 } else { (n - 1) % k };
-                let k_1 = k - k_2;
-                let l_minus_one_times_k = n - 1 - k_2;
-                let l_minus_one = l_minus_one_times_k / k;
-                let l = l_minus_one + 1;
-                let mut l_s: Vec<u64> = Vec::with_capacity(k as usize);
-                l_s.resize(l_s.len() + k_1 as usize, l_minus_one);
-                l_s.resize(l_s.len() + k_2 as usize, l);
-
-                let mut x_s: Vec<$Self> = Vec::with_capacity(k as usize);
-                let mut l_sum = 0;
-                l_s.iter().take((k as usize) - 1).for_each(|l| {
-                    l_sum += l;
-                    let x = x.pow(BigInteger::from(2u64.pow((n - 1 - l_sum) as u32)));
-                    x_s.push(x);
-                });
-                x_s.push(x);
-
-                let find = |delta: $Self| -> u64 {
-                    let mut mu = delta;
-                    let mut i = 0;
-                    while mu != -$Self::one() {
-                        mu.square_in_place();
-                        i += 1;
-                    }
-                    i
+                let hash = |x: &$Self| -> usize {
+                    // This is just the simplest constant-time perfect hash construction that could
+                    // possibly work. The 32 low-order bits are unique within the 2^S order subgroup,
+                    // then the xor acts as "salt" to injectively randomize the output when taken modulo
+                    // `hash_mod`. Since the table is small, we do not need anything more complicated.
+                    let slice = &x.to_bytes_le().unwrap()[..4];
+                    let mut array = [0u8; 4];
+                    array.copy_from_slice(slice);
+                    let lower_32 = u32::from_le_bytes(array);
+                    (lower_32 ^ $P::HASH_XOR) as usize % $P::HASH_MOD
                 };
 
-                let eval = |mut delta: $Self| -> u64 {
-                    let mut s = 0u64;
-                    while delta != $Self::one() {
-                        let i = find(delta);
-                        let n_minus_one_minus_i = n - 1 - i;
-                        s += 2u64.pow(n_minus_one_minus_i as u32);
-                        if i > 0 {
-                            delta *= $Self::from_repr($P::POWERS_OF_G[n_minus_one_minus_i as usize])
-                                .expect("precomputed powers of g should always convert properly");
-                        } else {
-                            delta = -delta;
-                        }
-                    }
-                    s
-                };
+                let inv = |x: $Self| $P::HASH_INV[hash(&x)] as usize;
 
-                let calc_kappa = |i: usize, j: usize, l_s: &[u64]| -> u64 {
-                    l_s.iter().take(j).sum::<u64>() + 1 + l_s.iter().skip(i + 1).sum::<u64>()
-                };
+                // i = 0, 1
+                let mut t_ = inv(x0);
+                assert_eq!($Self::one(), x0 * g.pow(sqr($Self::from(t_ as u64), 39).to_repr()));
+                let alpha = x1 * $Self::from_repr($P::G4[t_]).unwrap();
 
-                let calc_gamma = |i: usize, q_s: &[Vec<bool>], last: bool| -> $Self {
-                    let mut gamma = $Self::one();
-                    if i != 0 {
-                        q_s.iter().zip(l_s.iter()).enumerate().for_each(|(j, (q_bits, l))| {
-                            let mut kappa = calc_kappa(i, j, &l_s);
-                            if last {
-                                kappa -= 1;
-                            }
-                            q_bits.iter().enumerate().take(*l as usize).for_each(|(k, bit)| {
-                                if *bit {
-                                    gamma *= $Self::from_repr($P::POWERS_OF_G[(kappa as usize) + k])
-                                        .expect("precomputed powers of g should always convert properly");
-                                }
-                            });
-                        });
-                    }
-                    gamma
-                };
+                // i = 2
+                t_ += inv(alpha) << 8;
+                let alpha =
+                    x2 * $Self::from_repr($P::G3[t_ & 0x3F]).unwrap() * $Self::from_repr($P::G4[t_ >> 8]).unwrap();
 
-                let mut q_s = Vec::<Vec<bool>>::with_capacity(k as usize);
-                let two_to_n_minus_l = 2u64.pow((n - l) as u32);
-                let two_to_n_minus_l_minus_one = 2u64.pow((n - l_minus_one) as u32);
-                x_s.iter().enumerate().for_each(|(i, x)| {
-                    // Calculate g^t.
-                    // This algorithm deviates from the standard description in the paper, and is
-                    // explained in detail in page 6, in section 2.1.
-                    let gamma = calc_gamma(i, &q_s, false);
-                    let alpha = *x * gamma;
-                    q_s.push(
-                        (eval(alpha) / if i < k_1 as usize { two_to_n_minus_l_minus_one } else { two_to_n_minus_l })
-                            .to_bits_le(),
-                    );
-                });
+                // i = 3
+                t_ += inv(alpha) << 16;
+                let alpha = x3
+                    * $Self::from_repr($P::G2[t_ & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G3[(t_ >> 8) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G4[t_ >> 16]).unwrap();
 
-                // Calculate g^{t/2}.
-                let gamma = calc_gamma(k as usize, &q_s, true);
-                Some(*$self * v * gamma)
+                // i = 4
+                t_ += inv(alpha) << 24;
+                let alpha = x4
+                    * $Self::from_repr($P::G1[t_ & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G2[(t_ >> 8) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G3[(t_ >> 16) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G4[t_ >> 24]).unwrap();
+
+                // i = 5
+                t_ += inv(alpha) << (n - 15);
+                let alpha = x5
+                    * $Self::from_repr($P::G0[t_ & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G1[(t_ >> 8) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G2[(t_ >> 16) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G3[(t_ >> 24) & 0x3F]).unwrap()
+                    * $Self::from_repr($P::G4[t_ >> (n - 15)]).unwrap();
+
+                t_ += inv(alpha) << (n - 8);
+                t_ >>= 1;
+
+                Some(
+                    uv * $Self::from_repr($P::G0[t_ & 0x3F]).unwrap()
+                        * $Self::from_repr($P::G1[(t_ >> 8) & 0x3F]).unwrap()
+                        * $Self::from_repr($P::G2[(t_ >> 16) & 0x3F]).unwrap()
+                        * $Self::from_repr($P::G3[(t_ >> 24) & 0x3F]).unwrap()
+                        * $Self::from_repr($P::G4[(t_ >> (n - 15)) & 0x3F]).unwrap()
+                        * $Self::from_repr($P::G5[t_ >> (n - 8)]).unwrap(),
+                )
             }
         }
     }};

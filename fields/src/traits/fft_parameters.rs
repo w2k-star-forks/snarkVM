@@ -41,5 +41,13 @@ pub trait FftParameters: 'static + Send + Sync + Sized {
     /// SMALL_SUBGROUP_BASE^SMALL_SUBGROUP_BASE_ADICITY)) Used for mixed-radix FFT.
     const LARGE_SUBGROUP_ROOT_OF_UNITY: Option<Self::BigInteger> = None;
 
-    const POWERS_OF_G: &'static [Self::BigInteger];
+    const HASH_XOR: u32;
+    const HASH_MOD: usize;
+    const HASH_INV: &'static [u8];
+    const G0: &'static [Self::BigInteger];
+    const G1: &'static [Self::BigInteger];
+    const G2: &'static [Self::BigInteger];
+    const G3: &'static [Self::BigInteger];
+    const G4: &'static [Self::BigInteger];
+    const G5: &'static [Self::BigInteger];
 }
